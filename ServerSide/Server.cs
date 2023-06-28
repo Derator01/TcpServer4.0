@@ -55,7 +55,7 @@ public class Server
 
             //StartHandshakeTimer(client);
 
-            Thread.Sleep(5);
+            Thread.Sleep(100);
 
             if (client.IsMessagePending())
             {

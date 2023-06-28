@@ -46,10 +46,7 @@ public class Client
     {
         TcpClient = new TcpClient();
 
-        CancellationTokenSource cts = new();
-        CancellationToken ct = cts.Token;
-
-        TcpClient.ConnectAsync(EndPoint, ct);
+        TcpClient.ConnectAsync(EndPoint);
 
         //Thread.Sleep(10);
         //if (!Connected)
@@ -58,12 +55,16 @@ public class Client
         //    return false;
         //}
 
+        Thread.Sleep(50);
+
         SendMessage(Name); // HandShake
+
+        Thread.Sleep(50);
 
         if (Connected)
         {
             if (IsMessagePending())
-                if (RecieveHandshake() != "")
+                if (RecieveHandshake() == "")
                 {
                     TcpClient.Close();
                     Disconnected?.Invoke();
