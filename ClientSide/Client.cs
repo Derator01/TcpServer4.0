@@ -16,8 +16,11 @@ public class Client
     private IPEndPoint EndPoint { get; }
 
     #region Events
-    public delegate void OnConnectedToServer();
-    public event OnConnectedToServer? ConnectedToServer;
+    public delegate void OnConnectionFailed(string message);
+    public event OnConnectionFailed? ConnectionFailed;
+
+    public delegate void OnConnectionSucceded(string serverName);
+    public event OnConnectionSucceded? ConnectionSucceded;
 
     public delegate void OnMessageCame(string message);
     public event OnMessageCame? MessageCame;
@@ -26,12 +29,16 @@ public class Client
     public event OnDisconnected? Disconnected;
     #endregion
 
-    public Client(string name, long ip, int port)
+
+    /// <summary>
+    /// With this constructor client will search through all local ips.
+    /// </summary>
+    /// <param name="name">Name of the client that will be known to server</param>
+    public Client(string name, int port = 7000)
     {
         Name = name;
-        EndPoint = new IPEndPoint(ip, port);
     }
-    public Client(string name, IPAddress ip, int port)
+    public Client(string name, IPAddress ip, int port = 7000)
     {
         Name = name;
         EndPoint = new IPEndPoint(ip, port);
@@ -44,40 +51,64 @@ public class Client
 
     public async Task<bool> ConnectAsync()
     {
+        if (EndPoint is null)
+        {
+            IPAddress[] localIPs = Dns.GetHostAddresses(Dns.GetHostName());
+
+            foreach (IPAddress localIP in localIPs)
+            {
+                if (await TryConnectAsync(new IPEndPoint(localIP, 7000)))
+                    return true;
+            }
+
+            ConnectionFailed?.Invoke("Connection failed for all local IP addresses.");
+            return false;
+        }
+        return await TryConnectAsync(EndPoint);
+    }
+
+    private async Task<bool> TryConnectAsync(IPEndPoint endPoint)
+    {
         TcpClient = new TcpClient();
 
-        TcpClient.ConnectAsync(EndPoint);
+        int maxRetryAttempts = 3;
+        int retryDelayMilliseconds = 100;
 
-        //Thread.Sleep(10);
-        //if (!Connected)
-        //{
-        //    cts.Cancel();
-        //    return false;
-        //}
-
-        Thread.Sleep(50);
-
-        SendMessage(Name); // HandShake
-
-        Thread.Sleep(50);
-
-        if (Connected)
+        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++)
         {
-            if (IsMessagePending())
-                if (RecieveHandshake() == "")
+            try
+            {
+                Task connectTask = TcpClient.ConnectAsync(endPoint);
+                Task completedTask = await Task.WhenAny(connectTask, Task.Delay(retryDelayMilliseconds));
+
+                if (completedTask == connectTask)
+                {
+                    await connectTask;
+                    SendMessage(Name); // Handshake
+
+                    if (Connected)
+                    {
+                        ConnectionSucceded?.Invoke(RecieveHandshake());
+
+                        new Thread(MessageReceiveLoop).Start();
+                        new Thread(SendConnectionVerificationMessageLoop).Start();
+                        return true; // Connection established successfully
+                    }
+                }
+                else
                 {
                     TcpClient.Close();
-                    Disconnected?.Invoke();
-
-                    return false;
+                    break;
                 }
-
-            new Thread(MessageRecieveLoop).Start();
-            new Thread(SendConnectionVerificationMessageLoop).Start();
-
-            ConnectedToServer?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                ConnectionFailed?.Invoke($"Connection attempt {attempt} failed: {ex.Message}");
+            }
         }
-        return Connected;
+        ConnectionFailed?.Invoke("Connection failed after all retry attempts.");
+
+        return false;
     }
 
     public bool IsMessagePending()
@@ -87,7 +118,7 @@ public class Client
         return false;
     }
 
-    private void MessageRecieveLoop()
+    private void MessageReceiveLoop()
     {
         while (Connected)
         {
@@ -95,31 +126,37 @@ public class Client
                 RecieveMessage();
             Thread.Sleep(3);  // To note
         }
-        Disconnected?.Invoke();
+        //Disconnected?.Invoke();
     }
 
     private void RecieveMessage()
     {
-        byte[] buffer = new byte[PACKET_SIZE];
-        TcpClient.GetStream().Read(buffer, 0, buffer.Length);
+        var stream = TcpClient.GetStream();
 
+        byte[] bufferSize = new byte[2];
+        stream.Read(bufferSize, 0, bufferSize.Length);
+        //Array.Reverse(bufferSize);
 
-        Message message = new Message(buffer);
-
-        if (string.IsNullOrEmpty(message))
+        if (bufferSize[0] == 0 && bufferSize[1] == 0)
             return;
 
-        MessageCame?.Invoke(message);
+        byte[] buffer = new byte[BitConverter.ToUInt16(bufferSize)];
+        stream.Read(buffer, 0, buffer.Length);
+
+        MessageCame?.Invoke(new Message(buffer));
     }
     private Message RecieveHandshake()
     {
-        byte[] buffer = new byte[PACKET_SIZE];
-        TcpClient.GetStream().Read(buffer, 0, buffer.Length);
+        var stream = TcpClient.GetStream();
 
+        byte[] bufferSize = new byte[2];
+        stream.Read(bufferSize, 0, bufferSize.Length);
+        //Array.Reverse(bufferSize);
 
-        Message message = new Message(buffer);
+        byte[] buffer = new byte[BitConverter.ToUInt16(bufferSize)];
+        stream.Read(buffer, 0, buffer.Length);
 
-        return message;
+        return new Message(buffer);
     }
 
     public void SendMessage(string text)
@@ -128,20 +165,31 @@ public class Client
             return;
         try
         {
-            TcpClient.GetStream().Write(text.ToBytes());
+            NetworkStream networkStream = TcpClient.GetStream();
+
+            byte[] bytes = text.ToBytes();
+            byte[] buffer = new byte[bytes.Length + 2];
+
+            buffer[0] = (byte)(bytes.Length >> 8);
+            buffer[1] = (byte)bytes.Length;
+
+            Buffer.BlockCopy(bytes, 0, buffer, 2, bytes.Length);
+
+            networkStream.Write(buffer, 0, buffer.Length);
         }
         catch (IOException ex)
         {
             TcpClient.Close();
+            Disconnected?.Invoke();
         }
     }
 
-    public void SendConnectionVerificationMessageLoop()
+    private void SendConnectionVerificationMessageLoop()
     {
         while (Connected)
         {
             SendMessage(string.Empty);
-            Thread.Sleep(3);
+            Thread.Sleep(100);
         }
     }
 }

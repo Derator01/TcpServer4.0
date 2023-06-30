@@ -8,7 +8,7 @@ public record Message
 
     public Message(byte[] packet)
     {
-        Text = Encoding.UTF8.GetString(packet, 0, packet.Length - 1).RemoveZeros();
+        Text = Encoding.UTF8.GetString(packet, 0, packet.Length).RemoveZeros();
     }
 
     public Message(string rawMessage)

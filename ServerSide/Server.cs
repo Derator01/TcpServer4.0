@@ -1,15 +1,18 @@
-﻿using System.Net.Sockets;
+﻿using System.Net;
+using System.Net.Sockets;
+using TcpServer.Common;
 
 namespace TcpServer.ServerSide;
 
 public class Server
 {
+    public int MaxAllawedConnections = 100;
+
     public string Name;
 
     public bool IsRunning { get; set; }
 
     private TcpListener _listener;
-    public int MaxAllawedConnections = 100;
     private readonly List<Client> _clients = new();
 
     #region Events
@@ -26,16 +29,21 @@ public class Server
     public Server(string name, int port = 7000)
     {
         Name = name;
-        _listener = new TcpListener(System.Net.IPAddress.Any, port);
+        _listener = new TcpListener(IPAddress.IPv6Any, port);
+        _listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, false);
     }
 
     public void Start()
     {
+        if (IsRunning)
+            return;
+
         _listener.Start();
         IsRunning = true;
 
         new Thread(ListeningLoop).Start();
         new Thread(MessageRecieveLoop).Start();
+        new Thread(SendConnectionVerificationMessageLoop).Start();
     }
 
     public void Stop()
@@ -49,30 +57,19 @@ public class Server
         while (IsRunning)
         {
             if (_clients.Count == MaxAllawedConnections)
+            {
+                Thread.Sleep(100);
                 return;
+            }
 
             Client client = new(_listener.AcceptTcpClient());
 
-            //StartHandshakeTimer(client);
+            client.Name = client.RecieveMessage(); // Handshake in
+            client.SendMessage(Name); // Handshake out
+            _clients.Add(client);
 
-            Thread.Sleep(100);
-
-            if (client.IsMessagePending())
-            {
-                client.Name = client.RecieveMessage();
-                _clients.Add(client);
-                ClientConnected?.Invoke(client.Name);
-
-                client.SendMessage(Name); // handshake
-            }
-            else
-                client.Dispose();
+            ClientConnected?.Invoke(client.Name);
         }
-    }
-
-    private void StartHandshakeTimer(Client client)
-    {
-        new Timer((s) => { if (string.IsNullOrEmpty(client.Name)) client.Close(); else _clients.Add(client); }, null, 10, Timeout.Infinite);
     }
 
     private void MessageRecieveLoop()
@@ -83,10 +80,9 @@ public class Server
             {
                 Client? client = _clients[i];
 
-                client?.SendMessage(string.Empty);
-
                 if (client is null)
                 {
+                    //throw new Exception("Client is suddenly null.");
                     break;
                 }
 
@@ -104,12 +100,21 @@ public class Server
         }
     }
 
+    private void SendConnectionVerificationMessageLoop()
+    {
+        while (IsRunning)
+        {
+            SendMessage(string.Empty);
+            Thread.Sleep(100);
+        }
+    }
+
     private void RecieveMessageFrom(Client client)
     {
         if (!client.Connected)
             return;
 
-        Common.Message message = client.RecieveMessage();
+        Message message = client.RecieveMessage();
 
         if (string.IsNullOrEmpty(message))
             return;
@@ -117,20 +122,20 @@ public class Server
         MessageCame?.Invoke(client.Name, message);
     }
 
-    public void SendMessage(string message)
+    public void SendMessage(string text)
     {
         for (int i = 0; i < _clients.Count; i++)
         {
             var client = _clients[i];
 
-            client?.SendMessage(message);
+            client?.SendMessage(text);
         }
     }
-    public void SendMessage(string name, string message)
+    public void SendMessage(string name, string text)
     {
         var client = _clients.FirstOrDefault(c => c.Name == name);
 
-        client?.SendMessage(message);
+        client?.SendMessage(text);
     }
 
     public void Disconnect()
@@ -143,11 +148,11 @@ public class Server
 
             ClientDisconnected?.Invoke(client.Name);
         }
-        //_clients.Clear();
+        _clients.Clear();
     }
-    public void Disconnect(string clientName)
+    public void Disconnect(string name)
     {
-        var client = _clients.FirstOrDefault(x => x.Name == clientName);
+        var client = _clients.FirstOrDefault(x => x.Name == name);
 
         if (client is not null)
             Disconnect(client);
