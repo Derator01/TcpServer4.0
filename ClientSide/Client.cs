@@ -64,6 +64,7 @@ public class Client
             ConnectionFailed?.Invoke("Connection failed for all local IP addresses.");
             return false;
         }
+
         return await TryConnectAsync(EndPoint);
     }
 
