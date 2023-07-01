@@ -12,7 +12,7 @@ public class Client
 
     public bool Connected { get => TcpClient.Connected; }
 
-    private TcpClient TcpClient { get; set; }
+    private TcpClient TcpClient { get; set; } = new TcpClient();
     private IPEndPoint EndPoint { get; }
 
     #region Events
@@ -31,12 +31,13 @@ public class Client
 
 
     /// <summary>
-    /// With this constructor client will search through all local ips.
+    /// With this constructor client will search through all local IPs.
     /// </summary>
     /// <param name="name">Name of the client that will be known to server</param>
     public Client(string name, int port = 7000)
     {
         Name = name;
+        EndPoint = new IPEndPoint(IPAddress.Any, port);
     }
     public Client(string name, IPAddress ip, int port = 7000)
     {
@@ -51,66 +52,73 @@ public class Client
 
     public async Task<bool> ConnectAsync()
     {
-        if (EndPoint is null)
+        if (EndPoint.Address == IPAddress.Any)
         {
-            IPAddress[] localIPs = Dns.GetHostAddresses(Dns.GetHostName());
-
-            foreach (IPAddress localIP in localIPs)
+            for (byte b = 101; b < 255; b++)
             {
-                if (await TryConnectAsync(new IPEndPoint(localIP, 7000)))
+                IPAddress ipAddress = new(new byte[] { 192, 168, 1, b });
+
+                if (await TryConnectAsync(new IPEndPoint(ipAddress, EndPoint.Port)))
+                {
                     return true;
+                }
+            }
+            for (byte b = 0; b < 100; b++)
+            {
+                IPAddress ipAddress = new(new byte[] { 192, 168, 1, b });
+
+                if (await TryConnectAsync(new IPEndPoint(ipAddress, EndPoint.Port)))
+                {
+                    return true;
+                }
             }
 
-            ConnectionFailed?.Invoke("Connection failed for all local IP addresses.");
+            ConnectionFailed?.Invoke("Connection failed for all IP addresses in the range.");
             return false;
         }
-
-        return await TryConnectAsync(EndPoint);
+        else
+        {
+            return await TryConnectAsync(EndPoint);
+        }
     }
 
     private async Task<bool> TryConnectAsync(IPEndPoint endPoint)
     {
-        TcpClient = new TcpClient();
+        var tcpClient = new TcpClient();
 
-        int maxRetryAttempts = 3;
-        int retryDelayMilliseconds = 100;
+        int retryDelayMilliseconds = 20;
 
-        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++)
+        try
         {
-            try
+            Task connectTask = tcpClient.ConnectAsync(endPoint);
+
+            if (await Task.WhenAny(connectTask, Task.Delay(retryDelayMilliseconds)) == connectTask)
             {
-                Task connectTask = TcpClient.ConnectAsync(endPoint);
-                Task completedTask = await Task.WhenAny(connectTask, Task.Delay(retryDelayMilliseconds));
+                await connectTask;
 
-                if (completedTask == connectTask)
+                TcpClient = tcpClient;
+                SendMessage(Name); // Handshake
+
+                if (Connected)
                 {
-                    await connectTask;
-                    SendMessage(Name); // Handshake
+                    ConnectionSucceded?.Invoke(RecieveHandshake());
 
-                    if (Connected)
-                    {
-                        ConnectionSucceded?.Invoke(RecieveHandshake());
-
-                        new Thread(MessageReceiveLoop).Start();
-                        new Thread(SendConnectionVerificationMessageLoop).Start();
-                        return true; // Connection established successfully
-                    }
-                }
-                else
-                {
-                    TcpClient.Close();
-                    break;
+                    new Thread(MessageReceiveLoop).Start();
+                    new Thread(SendConnectionVerificationMessageLoop).Start();
+                    return true;
                 }
             }
-            catch (Exception ex)
-            {
-                ConnectionFailed?.Invoke($"Connection attempt {attempt} failed: {ex.Message}");
-            }
+
+            tcpClient.Close();
         }
-        ConnectionFailed?.Invoke("Connection failed after all retry attempts.");
+        catch (Exception ex)
+        {
+            ConnectionFailed?.Invoke("Connection failed after trying.");
+        }
 
         return false;
     }
+
 
     public bool IsMessagePending()
     {
@@ -127,7 +135,6 @@ public class Client
                 RecieveMessage();
             Thread.Sleep(3);  // To note
         }
-        //Disconnected?.Invoke();
     }
 
     private void RecieveMessage()
@@ -136,7 +143,6 @@ public class Client
 
         byte[] bufferSize = new byte[2];
         stream.Read(bufferSize, 0, bufferSize.Length);
-        //Array.Reverse(bufferSize);
 
         if (bufferSize[0] == 0 && bufferSize[1] == 0)
             return;
@@ -152,7 +158,6 @@ public class Client
 
         byte[] bufferSize = new byte[2];
         stream.Read(bufferSize, 0, bufferSize.Length);
-        //Array.Reverse(bufferSize);
 
         byte[] buffer = new byte[BitConverter.ToUInt16(bufferSize)];
         stream.Read(buffer, 0, buffer.Length);
@@ -171,8 +176,8 @@ public class Client
             byte[] bytes = text.ToBytes();
             byte[] buffer = new byte[bytes.Length + 2];
 
-            buffer[0] = (byte)(bytes.Length >> 8);
-            buffer[1] = (byte)bytes.Length;
+            buffer[0] = (byte)bytes.Length;
+            buffer[1] = (byte)(bytes.Length >> 8);
 
             Buffer.BlockCopy(bytes, 0, buffer, 2, bytes.Length);
 

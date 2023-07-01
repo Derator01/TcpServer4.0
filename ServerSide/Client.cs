@@ -29,10 +29,10 @@ public class Client : IDisposable
 
         byte[] bufferSize = new byte[2];
         stream.Read(bufferSize, 0, bufferSize.Length);
-        //Array.Reverse(bufferSize);
 
         if (bufferSize[0] == 0 && bufferSize[1] == 0)
             return new Message("");
+
         byte[] buffer = new byte[BitConverter.ToUInt16(bufferSize)];
         stream.Read(buffer, 0, buffer.Length);
 
@@ -51,8 +51,8 @@ public class Client : IDisposable
             byte[] bytes = text.ToBytes();
             byte[] buffer = new byte[bytes.Length + 2];
 
-            buffer[0] = (byte)(bytes.Length >> 8);
-            buffer[1] = (byte)bytes.Length;
+            buffer[0] = (byte)bytes.Length;
+            buffer[1] = (byte)(bytes.Length >> 8);
 
             Buffer.BlockCopy(bytes, 0, buffer, 2, bytes.Length);
 
