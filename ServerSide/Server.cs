@@ -6,7 +6,7 @@ namespace TcpServer.ServerSide;
 
 public class Server
 {
-    public int MaxAllawedConnections = 100;
+    public int MaxAllowedConnections = 100;
 
     public string Name;
 
@@ -19,7 +19,7 @@ public class Server
     public delegate void OnClientConnected(string client);
     public event OnClientConnected? ClientConnected;
 
-    public delegate void OnMessageCame(string client, string message);
+    public delegate void OnMessageCame(string client, Message message);
     public event OnMessageCame? MessageCame;
 
     public delegate void OnClientDisconnected(string client);
@@ -44,22 +44,18 @@ public class Server
         new Thread(ListeningLoop).Start();
         new Thread(MessageRecieveLoop).Start();
         new Thread(SendConnectionVerificationMessageLoop).Start();
-    }
 
-    public void Stop()
-    {
-        _listener.Stop();
-        IsRunning = false;
+
     }
 
     private void ListeningLoop()
     {
         while (IsRunning)
         {
-            if (_clients.Count == MaxAllawedConnections)
+            if (_clients.Count == MaxAllowedConnections)
             {
                 Thread.Sleep(100);
-                return;
+                continue;
             }
 
             Client client = new(_listener.AcceptTcpClient());
@@ -122,6 +118,15 @@ public class Server
         MessageCame?.Invoke(client.Name, message);
     }
 
+    public void SendMessage(byte[] bytes)
+    {
+        for (int i = 0; i < _clients.Count; i++)
+        {
+            var client = _clients[i];
+
+            client?.SendMessage(bytes);
+        }
+    }
     public void SendMessage(string text)
     {
         for (int i = 0; i < _clients.Count; i++)
@@ -163,5 +168,16 @@ public class Server
 
         _clients.Remove(client);
         client?.Close();
+    }
+
+    public void Stop()
+    {
+        IsRunning = false;
+
+        foreach (var client in _clients)
+            client.Dispose();
+        _clients.Clear();
+
+        _listener.Stop();
     }
 }

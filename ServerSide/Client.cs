@@ -39,6 +39,29 @@ public class Client : IDisposable
         return new Message(buffer);
     }
 
+    internal void SendMessage(byte[] bytes)
+    {
+        if (!Connected)
+            return;
+
+        try
+        {
+            NetworkStream networkStream = TcpClient.GetStream();
+
+            byte[] buffer = new byte[bytes.Length + 2];
+
+            buffer[0] = (byte)bytes.Length;
+            buffer[1] = (byte)(bytes.Length >> 8);
+
+            Buffer.BlockCopy(bytes, 0, buffer, 2, bytes.Length);
+
+            networkStream.Write(buffer, 0, buffer.Length);
+        }
+        catch (IOException ex)
+        {
+            Dispose();
+        }
+    }
     internal void SendMessage(string text)
     {
         if (!Connected)

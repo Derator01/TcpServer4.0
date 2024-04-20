@@ -4,9 +4,9 @@ using TcpServer.Common;
 
 namespace TcpServer.ClientSide;
 
-public class Client
+public class Client : IDisposable
 {
-    public const int PACKET_SIZE = 1024;
+    public int ConnectionTryTimeout { get; set; } = 100;
 
     public string Name { get; private set; }
 
@@ -22,7 +22,7 @@ public class Client
     public delegate void OnConnectionSucceded(string serverName);
     public event OnConnectionSucceded? ConnectionSucceded;
 
-    public delegate void OnMessageCame(string message);
+    public delegate void OnMessageCame(Message message);
     public event OnMessageCame? MessageCame;
 
     public delegate void OnDisconnected();
@@ -39,11 +39,13 @@ public class Client
         Name = name;
         EndPoint = new IPEndPoint(IPAddress.Any, port);
     }
+    /// <param name="name">Name of the client that will be known to server</param>
     public Client(string name, IPAddress ip, int port = 7000)
     {
         Name = name;
         EndPoint = new IPEndPoint(ip, port);
     }
+    /// <param name="name">Name of the client that will be known to server</param>
     public Client(string name, IPEndPoint endPoint)
     {
         Name = name;
@@ -84,15 +86,13 @@ public class Client
 
     private async Task<bool> TryConnectAsync(IPEndPoint endPoint)
     {
-        var tcpClient = new TcpClient();
-
-        int retryDelayMilliseconds = 20;
+        TcpClient tcpClient = new();
 
         try
         {
             Task connectTask = tcpClient.ConnectAsync(endPoint);
 
-            if (await Task.WhenAny(connectTask, Task.Delay(retryDelayMilliseconds)) == connectTask)
+            if (await Task.WhenAny(connectTask, Task.Delay(ConnectionTryTimeout)) == connectTask)
             {
                 await connectTask;
 
@@ -165,10 +165,35 @@ public class Client
         return new Message(buffer);
     }
 
+    public void SendMessage(byte[] bytes)
+    {
+        if (!Connected)
+            return;
+
+        try
+        {
+            NetworkStream networkStream = TcpClient.GetStream();
+
+            byte[] buffer = new byte[bytes.Length + 2];
+
+            buffer[0] = (byte)bytes.Length;
+            buffer[1] = (byte)(bytes.Length >> 8);
+
+            Buffer.BlockCopy(bytes, 0, buffer, 2, bytes.Length);
+
+            networkStream.Write(buffer, 0, buffer.Length);
+        }
+        catch (IOException ex)
+        {
+            TcpClient.Close();
+            Disconnected?.Invoke();
+        }
+    }
     public void SendMessage(string text)
     {
         if (!Connected)
             return;
+
         try
         {
             NetworkStream networkStream = TcpClient.GetStream();
@@ -197,5 +222,11 @@ public class Client
             SendMessage(string.Empty);
             Thread.Sleep(100);
         }
+    }
+
+    public void Dispose()
+    {
+        TcpClient.Close();
+        TcpClient.Dispose();
     }
 }
